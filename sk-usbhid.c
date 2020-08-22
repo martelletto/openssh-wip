@@ -1150,7 +1150,6 @@ sk_load_resident_keys(const char *pin, struct sk_option **options,
     struct sk_resident_key ***rksp, size_t *nrksp)
 {
 	int ret = SSH_SK_ERR_GENERAL, r = -1;
-	fido_dev_info_t *devlist = NULL;
 	size_t i, nrks = 0;
 	struct sk_resident_key **rks = NULL;
 	struct sk_usbhid *sk = NULL;
@@ -1193,7 +1192,6 @@ sk_load_resident_keys(const char *pin, struct sk_option **options,
 		freezero(rks[i], sizeof(*rks[i]));
 	}
 	free(rks);
-	fido_dev_info_free(&devlist, MAX_FIDO_DEVICES);
 	return ret;
 }
 
