@@ -444,121 +444,6 @@ sk_probe(const char *application, const uint8_t *key_handle,
 	return sk;
 }
 
-/* Check if the specified key handle exists on a given device. */
-static int
-try_device(fido_dev_t *dev, const uint8_t *message, size_t message_len,
-    const char *application, const uint8_t *key_handle, size_t key_handle_len)
-{
-	fido_assert_t *assert = NULL;
-	int r = FIDO_ERR_INTERNAL;
-
-	if ((assert = fido_assert_new()) == NULL) {
-		skdebug(__func__, "fido_assert_new failed");
-		goto out;
-	}
-	if ((r = fido_assert_set_clientdata_hash(assert, message,
-	    message_len)) != FIDO_OK) {
-		skdebug(__func__, "fido_assert_set_clientdata_hash: %s",
-		    fido_strerr(r));
-		goto out;
-	}
-	if ((r = fido_assert_set_rp(assert, application)) != FIDO_OK) {
-		skdebug(__func__, "fido_assert_set_rp: %s", fido_strerr(r));
-		goto out;
-	}
-	if ((r = fido_assert_allow_cred(assert, key_handle,
-	    key_handle_len)) != FIDO_OK) {
-		skdebug(__func__, "fido_assert_allow_cred: %s", fido_strerr(r));
-		goto out;
-	}
-	if ((r = fido_assert_set_up(assert, FIDO_OPT_FALSE)) != FIDO_OK) {
-		skdebug(__func__, "fido_assert_up: %s", fido_strerr(r));
-		goto out;
-	}
-	r = fido_dev_get_assert(dev, assert, NULL);
-	skdebug(__func__, "fido_dev_get_assert: %s", fido_strerr(r));
-	if (r == FIDO_ERR_USER_PRESENCE_REQUIRED) {
-		/* U2F tokens may return this */
-		r = FIDO_OK;
-	}
- out:
-	fido_assert_free(&assert);
-
-	return r != FIDO_OK ? -1 : 0;
-}
-
-/* Iterate over configured devices looking for a specific key handle */
-static fido_dev_t *
-find_device(const char *path, const uint8_t *message, size_t message_len,
-    const char *application, const uint8_t *key_handle, size_t key_handle_len)
-{
-	fido_dev_info_t *devlist = NULL;
-	fido_dev_t *dev = NULL;
-	size_t devlist_len = 0, i;
-	int r;
-
-	if (path != NULL) {
-		if ((dev = fido_dev_new()) == NULL) {
-			skdebug(__func__, "fido_dev_new failed");
-			return NULL;
-		}
-		if ((r = fido_dev_open(dev, path)) != FIDO_OK) {
-			skdebug(__func__, "fido_dev_open failed");
-			fido_dev_free(&dev);
-			return NULL;
-		}
-		return dev;
-	}
-
-	if ((devlist = fido_dev_info_new(MAX_FIDO_DEVICES)) == NULL) {
-		skdebug(__func__, "fido_dev_info_new failed");
-		goto out;
-	}
-	if ((r = fido_dev_info_manifest(devlist, MAX_FIDO_DEVICES,
-	    &devlist_len)) != FIDO_OK) {
-		skdebug(__func__, "fido_dev_info_manifest: %s", fido_strerr(r));
-		goto out;
-	}
-
-	skdebug(__func__, "found %zu device(s)", devlist_len);
-
-	for (i = 0; i < devlist_len; i++) {
-		const fido_dev_info_t *di = fido_dev_info_ptr(devlist, i);
-
-		if (di == NULL) {
-			skdebug(__func__, "fido_dev_info_ptr %zu failed", i);
-			continue;
-		}
-		if ((path = fido_dev_info_path(di)) == NULL) {
-			skdebug(__func__, "fido_dev_info_path %zu failed", i);
-			continue;
-		}
-		skdebug(__func__, "trying device %zu: %s", i, path);
-		if ((dev = fido_dev_new()) == NULL) {
-			skdebug(__func__, "fido_dev_new failed");
-			continue;
-		}
-		if ((r = fido_dev_open(dev, path)) != FIDO_OK) {
-			skdebug(__func__, "fido_dev_open failed");
-			fido_dev_free(&dev);
-			continue;
-		}
-		if (try_device(dev, message, message_len, application,
-		    key_handle, key_handle_len) == 0) {
-			skdebug(__func__, "found key");
-			break;
-		}
-		fido_dev_close(dev);
-		fido_dev_free(&dev);
-	}
-
- out:
-	if (devlist != NULL)
-		fido_dev_info_free(&devlist, MAX_FIDO_DEVICES);
-
-	return dev;
-}
-
 #ifdef WITH_OPENSSL
 /*
  * The key returned via fido_cred_pubkey_ptr() is in affine coordinates,
@@ -1023,7 +908,7 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 {
 	fido_assert_t *assert = NULL;
 	char *device = NULL;
-	fido_dev_t *dev = NULL;
+	struct sk_usbhid *sk = NULL;
 	struct sk_sign_response *response = NULL;
 	uint8_t message[32];
 	int ret = SSH_SK_ERR_GENERAL;
@@ -1043,9 +928,14 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 		skdebug(__func__, "hash message failed");
 		goto out;
 	}
-	if ((dev = find_device(device, message, sizeof(message), application,
-	    key_handle, key_handle_len)) == NULL) {
-		skdebug(__func__, "couldn't find device for key handle");
+	if (device != NULL)
+		sk = sk_open(device);
+	else if (pin != NULL || (flags & SSH_SK_USER_VERIFICATION_REQD))
+		sk = sk_probe(NULL, NULL, 0);
+	else
+		sk = sk_probe(application, key_handle, key_handle_len);
+	if (sk == NULL) {
+		skdebug(__func__, "failed to find sk");
 		goto out;
 	}
 	if ((assert = fido_assert_new()) == NULL) {
@@ -1079,7 +969,7 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 		ret = FIDO_ERR_PIN_REQUIRED;
 		goto out;
 	}
-	if ((r = fido_dev_get_assert(dev, assert, pin)) != FIDO_OK) {
+	if ((r = fido_dev_get_assert(sk->dev, assert, pin)) != FIDO_OK) {
 		skdebug(__func__, "fido_dev_get_assert: %s", fido_strerr(r));
 		ret = fidoerr_to_skerr(r);
 		goto out;
@@ -1105,13 +995,8 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 		free(response->sig_s);
 		free(response);
 	}
-	if (dev != NULL) {
-		fido_dev_close(dev);
-		fido_dev_free(&dev);
-	}
-	if (assert != NULL) {
-		fido_assert_free(&assert);
-	}
+	sk_close(sk);
+	fido_assert_free(&assert);
 	return ret;
 }
 
