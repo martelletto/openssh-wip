@@ -268,16 +268,108 @@ sk_touch_poll(struct sk_usbhid **skv, size_t nsk, int *touch, size_t *idx)
 	return 0;
 }
 
+/* Calculate SHA256(m) */
+static int
+sha256_mem(const void *m, size_t mlen, u_char *d, size_t dlen)
+{
+#ifdef WITH_OPENSSL
+	u_int mdlen;
+#endif
+
+	if (dlen != 32)
+		return -1;
+#ifdef WITH_OPENSSL
+	mdlen = dlen;
+	if (!EVP_Digest(m, mlen, d, &mdlen, EVP_sha256(), NULL))
+		return -1;
+#else
+	SHA256Data(m, mlen, d);
+#endif
+	return 0;
+}
+
+/* Check if the specified key handle exists on a given sk. */
+static int
+sk_try(const struct sk_usbhid *sk, const char *application,
+    const uint8_t *key_handle, size_t key_handle_len)
+{
+	fido_assert_t *assert = NULL;
+	/* XXX invalid in webauthn, presumed invalid in ssh */
+	const char *data = "";
+	uint8_t message[32];
+	int r = FIDO_ERR_INTERNAL;
+
+	if (sha256_mem(data, strlen(data), message, sizeof(message)) != 0) {
+		skdebug(__func__, "hash message failed");
+		goto out;
+	}
+	if ((assert = fido_assert_new()) == NULL) {
+		skdebug(__func__, "fido_assert_new failed");
+		goto out;
+	}
+	if ((r = fido_assert_set_clientdata_hash(assert, message,
+	    sizeof(message))) != FIDO_OK) {
+		skdebug(__func__, "fido_assert_set_clientdata_hash: %s",
+		    fido_strerr(r));
+		goto out;
+	}
+	if ((r = fido_assert_set_rp(assert, application)) != FIDO_OK) {
+		skdebug(__func__, "fido_assert_set_rp: %s", fido_strerr(r));
+		goto out;
+	}
+	if ((r = fido_assert_allow_cred(assert, key_handle,
+	    key_handle_len)) != FIDO_OK) {
+		skdebug(__func__, "fido_assert_allow_cred: %s", fido_strerr(r));
+		goto out;
+	}
+	if ((r = fido_assert_set_up(assert, FIDO_OPT_FALSE)) != FIDO_OK) {
+		skdebug(__func__, "fido_assert_up: %s", fido_strerr(r));
+		goto out;
+	}
+	r = fido_dev_get_assert(sk->dev, assert, NULL);
+	skdebug(__func__, "fido_dev_get_assert: %s", fido_strerr(r));
+	if (r == FIDO_ERR_USER_PRESENCE_REQUIRED) {
+		/* U2F tokens may return this */
+		r = FIDO_OK;
+	}
+ out:
+	fido_assert_free(&assert);
+
+	return r != FIDO_OK ? -1 : 0;
+}
+
 static struct sk_usbhid *
-sk_select(const fido_dev_info_t *devlist, size_t ndevs)
+sk_select_by_cred(const fido_dev_info_t *devlist, size_t ndevs,
+    const char *application, const uint8_t *key_handle, size_t key_handle_len)
+{
+	struct sk_usbhid **skv, *sk;
+	size_t skvcnt, i;
+
+	if ((skv = sk_openv(devlist, ndevs, &skvcnt)) == NULL) {
+		skdebug(__func__, "sk_openv failed");
+		return NULL;
+	}
+	sk = NULL;
+	for (i = 0; i < skvcnt; i++)
+		if (sk_try(skv[i], application, key_handle,
+		    key_handle_len) == 0) {
+			sk = skv[i];
+			skv[i] = NULL;
+			skdebug(__func__, "found key in %s", sk->path);
+			break;
+		}
+	sk_closev(skv, skvcnt);
+	return sk;
+}
+
+static struct sk_usbhid *
+sk_select_by_touch(const fido_dev_info_t *devlist, size_t ndevs)
 {
 	struct sk_usbhid **skv, *sk;
 	struct timeval tv_start, tv_now, tv_delta;
 	size_t skvcnt, idx;
 	int touch, ms_remain;
 
-	if (ndevs == 0)
-		return NULL; /* nothing to do */
 	if ((skv = sk_openv(devlist, ndevs, &skvcnt)) == NULL) {
 		skdebug(__func__, "sk_openv failed");
 		return NULL;
@@ -318,7 +410,8 @@ out:
 }
 
 static struct sk_usbhid *
-sk_probe(void)
+sk_probe(const char *application, const uint8_t *key_handle,
+    size_t key_handle_len)
 {
 	struct sk_usbhid *sk;
 	fido_dev_info_t *devlist;
@@ -337,8 +430,16 @@ sk_probe(void)
 		return NULL;
 	}
 	skdebug(__func__, "%zu device(s) detected", ndevs);
-	if ((sk = sk_select(devlist, ndevs)) == NULL)
-		skdebug(__func__, "sk_select failed");
+	if (ndevs == 0) {
+		sk = NULL;
+	} else if (application != NULL && key_handle != NULL) {
+		skdebug(__func__, "selecting sk by cred");
+		sk = sk_select_by_cred(devlist, ndevs, application, key_handle,
+		    key_handle_len);
+	} else {
+		skdebug(__func__, "selecting sk by touch");
+		sk = sk_select_by_touch(devlist, ndevs);
+	}
 	fido_dev_info_free(&devlist, MAX_FIDO_DEVICES);
 	return sk;
 }
@@ -677,7 +778,7 @@ sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
 	if (device != NULL)
 		sk = sk_open(device);
 	else
-		sk = sk_probe();
+		sk = sk_probe(NULL, NULL, 0);
 	if (sk == NULL) {
 		skdebug(__func__, "failed to find sk");
 		goto out;
@@ -910,26 +1011,6 @@ check_sign_load_resident_options(struct sk_option **options, char **devicep)
 			}
 		}
 	}
-	return 0;
-}
-
-/* Calculate SHA256(m) */
-static int
-sha256_mem(const void *m, size_t mlen, u_char *d, size_t dlen)
-{
-#ifdef WITH_OPENSSL
-	u_int mdlen;
-#endif
-
-	if (dlen != 32)
-		return -1;
-#ifdef WITH_OPENSSL
-	mdlen = dlen;
-	if (!EVP_Digest(m, mlen, d, &mdlen, EVP_sha256(), NULL))
-		return -1;
-#else
-	SHA256Data(m, mlen, d);
-#endif
 	return 0;
 }
 
@@ -1200,7 +1281,7 @@ sk_load_resident_keys(const char *pin, struct sk_option **options,
 	if (device != NULL)
 		sk = sk_open(device);
 	else
-		sk = sk_probe();
+		sk = sk_probe(NULL, NULL, 0);
 	if (sk == NULL) {
 		skdebug(__func__, "failed to find sk");
 		goto out;
