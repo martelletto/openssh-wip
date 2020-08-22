@@ -3581,9 +3581,15 @@ main(int argc, char **argv)
 			printf("You may need to touch your authenticator "
 			    "to authorize key generation.\n");
 		}
-		passphrase = NULL;
 		if ((attest = sshbuf_new()) == NULL)
 			fatal("sshbuf_new failed");
+		if ((sk_flags &
+		    (SSH_SK_USER_VERIFICATION_REQD|SSH_SK_RESIDENT_KEY))) {
+			passphrase = read_passphrase("Enter PIN for "
+			    "authenticator: ", RP_ALLOW_STDIN);
+		} else {
+			passphrase = NULL;
+		}
 		for (i = 0 ; ; i++) {
 			fflush(stdout);
 			r = sshsk_enroll(type, sk_provider, sk_device,
@@ -3594,9 +3600,8 @@ main(int argc, char **argv)
 				break;
 			if (r != SSH_ERR_KEY_WRONG_PASSPHRASE)
 				fatal("Key enrollment failed: %s", ssh_err(r));
-			else if (i > 0)
+			else if (passphrase != NULL) {
 				error("PIN incorrect");
-			if (passphrase != NULL) {
 				freezero(passphrase, strlen(passphrase));
 				passphrase = NULL;
 			}
