@@ -252,6 +252,7 @@ sk_touch_poll(struct sk_usbhid **skv, size_t nsk, int *touch, size_t *idx)
 			skdebug(__func__, "fido_dev_get_touch_status %s: %s",
 			    skv[i]->path, fido_strerr(r));
 			sk_close(skv[i]); /* discard device */
+			skv[i] = NULL;
 			if (--npoll == 0) {
 				skdebug(__func__, "no device left to poll");
 				return -1;
