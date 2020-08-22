@@ -59,9 +59,9 @@
 #endif
 
 #define MAX_FIDO_DEVICES	8
-#define FIDO2_POLL_MS		50
-#define U2F_POLL_MS		300
+#define FIDO_POLL_MS		50
 #define SELECT_MS		15000
+#define POLL_SLEEP_NS		200000000
 
 /* Compatibility with OpenSSH 1.0.x */
 #if (OPENSSL_VERSION_NUMBER < 0x10100000L)
@@ -237,18 +237,20 @@ sk_touch_begin(struct sk_usbhid **skv, size_t nsk)
 static int
 sk_touch_poll(struct sk_usbhid **skv, size_t nsk, int *touch, size_t *idx)
 {
+	struct timespec ts_pause;
 	size_t npoll, i;
-	int ms, r;
+	int r;
 
+	ts_pause.tv_sec = 0;
+	ts_pause.tv_nsec = POLL_SLEEP_NS;
+	nanosleep(&ts_pause, NULL);
 	npoll = nsk;
 	for (i = 0; i < nsk; i++) {
 		if (skv[i] == NULL)
 			continue; /* device discarded */
-		ms = fido_dev_is_fido2(skv[i]->dev) ?
-		    FIDO2_POLL_MS : U2F_POLL_MS;
 		skdebug(__func__, "polling %s", skv[i]->path);
 		if ((r = fido_dev_get_touch_status(skv[i]->dev, touch,
-		    ms)) != FIDO_OK) {
+		    FIDO_POLL_MS)) != FIDO_OK) {
 			skdebug(__func__, "fido_dev_get_touch_status %s: %s",
 			    skv[i]->path, fido_strerr(r));
 			sk_close(skv[i]); /* discard device */
@@ -308,7 +310,7 @@ sk_select(const fido_dev_info_t *devlist, size_t ndevs)
 		timersub(&tv_now, &tv_start, &tv_delta);
 		ms_remain = SELECT_MS - tv_delta.tv_sec * 1000 -
 		    tv_delta.tv_usec / 1000;
-	} while (ms_remain >= U2F_POLL_MS);
+	} while (ms_remain >= FIDO_POLL_MS);
 	skdebug(__func__, "timeout");
 out:
 	sk_closev(skv, skvcnt);
