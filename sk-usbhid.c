@@ -346,8 +346,7 @@ sk_probe(void)
 /* Check if the specified key handle exists on a given device. */
 static int
 try_device(fido_dev_t *dev, const uint8_t *message, size_t message_len,
-    const char *application, const uint8_t *key_handle, size_t key_handle_len,
-    uint8_t flags, const char *pin)
+    const char *application, const uint8_t *key_handle, size_t key_handle_len)
 {
 	fido_assert_t *assert = NULL;
 	int r = FIDO_ERR_INTERNAL;
@@ -375,7 +374,7 @@ try_device(fido_dev_t *dev, const uint8_t *message, size_t message_len,
 		skdebug(__func__, "fido_assert_up: %s", fido_strerr(r));
 		goto out;
 	}
-	r = fido_dev_get_assert(dev, assert, pin);
+	r = fido_dev_get_assert(dev, assert, NULL);
 	skdebug(__func__, "fido_dev_get_assert: %s", fido_strerr(r));
 	if (r == FIDO_ERR_USER_PRESENCE_REQUIRED) {
 		/* U2F tokens may return this */
@@ -390,8 +389,7 @@ try_device(fido_dev_t *dev, const uint8_t *message, size_t message_len,
 /* Iterate over configured devices looking for a specific key handle */
 static fido_dev_t *
 find_device(const char *path, const uint8_t *message, size_t message_len,
-    const char *application, const uint8_t *key_handle, size_t key_handle_len,
-    uint8_t flags, const char *pin)
+    const char *application, const uint8_t *key_handle, size_t key_handle_len)
 {
 	fido_dev_info_t *devlist = NULL;
 	fido_dev_t *dev = NULL;
@@ -445,7 +443,7 @@ find_device(const char *path, const uint8_t *message, size_t message_len,
 			continue;
 		}
 		if (try_device(dev, message, message_len, application,
-		    key_handle, key_handle_len, flags, pin) == 0) {
+		    key_handle, key_handle_len) == 0) {
 			skdebug(__func__, "found key");
 			break;
 		}
@@ -964,8 +962,8 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 		skdebug(__func__, "hash message failed");
 		goto out;
 	}
-	if ((dev = find_device(device, message, sizeof(message),
-	    application, key_handle, key_handle_len, flags, pin)) == NULL) {
+	if ((dev = find_device(device, message, sizeof(message), application,
+	    key_handle, key_handle_len)) == NULL) {
 		skdebug(__func__, "couldn't find device for key handle");
 		goto out;
 	}
