@@ -61,6 +61,7 @@ struct sk_resident_key {
 	size_t slot;
 	char *application;
 	struct sk_enroll_response key;
+	uint8_t flags;
 };
 
 struct sk_option {
@@ -69,7 +70,7 @@ struct sk_option {
 	uint8_t required;
 };
 
-#define SSH_SK_VERSION_MAJOR		0x00050000 /* current API version */
+#define SSH_SK_VERSION_MAJOR		0x00060000 /* current API version */
 #define SSH_SK_VERSION_MAJOR_MASK	0xffff0000
 
 /* Return the version of the middleware API */

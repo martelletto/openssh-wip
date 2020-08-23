@@ -759,8 +759,9 @@ sshsk_load_resident(const char *provider_path, const char *device,
 		default:
 			continue;
 		}
-		/* XXX where to get flags? */
 		flags = SSH_SK_USER_PRESENCE_REQD|SSH_SK_RESIDENT_KEY;
+		if ((rks[i]->flags & SSH_SK_USER_VERIFICATION_REQD))
+			flags |= SSH_SK_USER_VERIFICATION_REQD;
 		if ((r = sshsk_key_from_response(rks[i]->alg,
 		    rks[i]->application, flags, &rks[i]->key, &key)) != 0)
 			goto out;
