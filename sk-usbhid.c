@@ -295,7 +295,7 @@ sk_try(const struct sk_usbhid *sk, const char *application,
     const uint8_t *key_handle, size_t key_handle_len)
 {
 	fido_assert_t *assert = NULL;
-	/* XXX invalid in webauthn, presumed invalid in ssh */
+	/* generate an invalid signature on FIDO2 tokens */
 	const char *data = "";
 	uint8_t message[32];
 	int r = FIDO_ERR_INTERNAL;
